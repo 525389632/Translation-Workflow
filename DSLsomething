@@ -1,0 +1,352 @@
+edges: # 定义节点间的连接
+  - id: edge-start-to-term # 从开始节点到术语处理节点
+    source: start-1
+    target: code-term
+  - id: edge-term-to-kg # 从术语处理节点到KG检索节点
+    source: code-term
+    target: code-kg
+  - id: edge-kg-to-llm # 从KG检索节点到LLM翻译节点
+    source: code-kg
+    target: llm-translate
+  - id: edge-llm-to-end # 从LLM翻译节点到结束节点
+    source: llm-translate
+    target: end-1
+
+nodes: # 定义各个节点
+  - id: start-1 # 开始节点
+    data:
+      type: start
+      title: 输入文本 # 节点标题
+      desc: 起始节点，接收待翻译的英文原文。 # 节点描述
+      variables: # 定义输入变量
+        - variable: original_text # 变量名
+          label: 英文原文 # 变量标签（在界面上显示）
+          type: string # 变量类型
+          required: true # 是否必填
+          default: "" # 默认值
+
+  - id: code-term # 代码节点 1：术语处理
+    data:
+      type: code
+      title: 1. 术语注入准备 # 节点标题
+      desc: 加载术语库，在输入文本中查找术语，并生成翻译指令。 # 节点描述
+      variables:
+        inputs: # 定义输入变量
+          - variable: original_text # 接收来自开始节点的原文
+            label: 英文原文
+            type: string
+            required: true
+        outputs: # 定义输出变量
+          - variable: original_text_passthrough # 原文透传
+            label: 原始文本 (透传)
+            type: string
+          - variable: term_instructions # 生成的术语指令
+            label: 术语指令
+            type: string # 输出为单一字符串，每条指令占一行
+      code_language: python3 # 指定代码语言
+      code: | # Python 代码块
+        import pandas as pd
+        import ahocorasick
+        import io # 如果从字符串加载数据则需要
+        import os # 导入os以备将来可能使用环境变量加载术语
+
+        # --- 配置区 ---
+        # 方案 1: 定义 XLSX 文件路径 (在 Dify 沙箱环境中很可能失败!)
+        # 你必须调整这里以在 Dify 中正确加载数据。
+        # term_file_path = 'terms.xlsx' # 替换为正确路径（如果可访问）
+
+        # 方案 2 (Dify 推荐): 从嵌入的字符串数据加载 (例如 CSV 格式)
+        # 1. 将你的 XLSX 数据准备成字符串 (例如，在此处粘贴 CSV 格式)
+        # 2. 取消下面几行的注释，并注释掉 pd.read_excel 部分
+        # term_data_string = """SourceTerm,TargetTerm
+        # ETA,"预计抵达时间"
+        # Sonar,"声呐"
+        # AIS,"船舶自动识别系统"
+        # Port Side,"左舷"
+        # Boeing,"波音"
+        # Extra-Large Unmanned Undersea Vehicle (XLUUV),"超大型无人水下航行器(XLUUV)"
+        # """ # <<< 在这里粘贴你的 CSV 数据
+
+        # --- 加载术语库 ---
+        terms_map = {}
+        try:
+            # --- 方法 1: 从文件路径读取 (需要为 Dify 调整!) ---
+            # print(f"尝试从文件加载术语: {term_file_path}") # 调试信息
+            # df = pd.read_excel(term_file_path)
+            # print(f"找到的列: {df.columns.tolist()}") # 调试信息
+            # # 确保使用你 XLSX 文件中正确的列名
+            # df = df.dropna(subset=['SourceTerm', 'TargetTerm']) # 英文术语列 和 中文术语列
+            # terms_map = dict(zip(df['SourceTerm'], df['TargetTerm']))
+            # print(f"从文件加载了 {len(terms_map)} 个术语。") # 调试信息
+
+            # --- 方法 2: 从字符串读取 (如果在 Dify 中粘贴数据，请使用此方法) ---
+            # print("尝试从字符串数据加载术语...") # 调试信息
+            # term_data_io = io.StringIO(term_data_string) # 将字符串包装成文件对象
+            # df = pd.read_csv(term_data_io) # 使用 read_csv 读取
+            # print(f"找到的列: {df.columns.tolist()}") # 调试信息
+            # df = df.dropna(subset=['SourceTerm', 'TargetTerm']) # 根据需要调整列名
+            # terms_map = dict(zip(df['SourceTerm'], df['TargetTerm']))
+            # print(f"从字符串加载了 {len(terms_map)} 个术语。") # 调试信息
+
+            # --- 占位符：如果加载失败或未配置（请在加载功能正常后移除此部分！） ---
+            # **请在术语库加载功能正常工作后移除此占位符部分**
+            print("警告：术语库加载未针对 Dify 环境完全配置。正在使用占位符数据。")
+            terms_map = {
+                "ETA": "预计抵达时间",
+                "Sonar": "声呐",
+                "AIS": "船舶自动识别系统",
+                "Port Side": "左舷",
+                "Boeing": "波音",
+                "Extra-Large Unmanned Undersea Vehicle (XLUUV)": "超大型无人水下航行器(XLUUV)",
+                "Navy": "海军",
+                "Hammerhead mine": "锤头水雷",
+                "research and development (R&D) funding": "研发资金", # 从你的KG例子添加
+                "unmanned surface vehicles (USVs)": "无人水面艇(USV)", # 从你的KG例子添加
+                # 如果需要测试，可以从你的知识图谱示例中添加更多术语
+            }
+            print(f"正在使用 {len(terms_map)} 个占位符术语。")
+
+
+        except FileNotFoundError:
+            print(f"错误：在 '{term_file_path}' 未找到术语库文件。请检查路径和 Dify 环境访问权限。")
+            # 如果文件必须存在，这里需要后备或错误处理
+        except Exception as e:
+            print(f"加载或处理术语库时出错: {e}")
+
+        # --- 使用 Aho-Corasick 在文本中查找术语 ---
+        A = ahocorasick.Automaton() # 创建 AC 自动机
+        for k, v in terms_map.items(): # 将术语添加到自动机中
+            A.add_word(k, (k, v)) # k 是要查找的词，(k, v) 是找到时返回的数据
+        A.make_automaton() # 构建自动机
+
+        found_terms = {} # 使用字典存储每个结束位置找到的最长匹配项
+                       # 键是结束索引，值是 (开始索引, 英文术语, 中文术语)
+        for end_index, (original_value, mapped_value) in A.iter(original_text):
+            start_index = end_index - len(original_value) + 1
+            # 存储术语，优先选择在同一位置结束的更长匹配项
+            if end_index not in found_terms or len(original_value) > len(found_terms[end_index][1]):
+                 found_terms[end_index] = (start_index, original_value, mapped_value)
+
+        # --- 生成指令 ---
+        instructions = []
+        # 按开始索引排序以保持顺序，处理不重叠的最长匹配项
+        processed_indices = set() # 记录已处理过的字符索引，避免重叠
+        for end_index in sorted(found_terms.keys()): # 按结束位置排序
+            start_index, term_en, term_zh = found_terms[end_index]
+            # 检查是否与已处理的术语重叠
+            # 如果当前术语覆盖的任何索引都未被处理过
+            if not any(i in processed_indices for i in range(start_index, end_index + 1)):
+                # 添加翻译指令
+                instructions.append(f"Translate '{term_en}' as '{term_zh}'.")
+                # 将当前术语覆盖的索引标记为已处理
+                processed_indices.update(range(start_index, end_index + 1))
+
+        # 将指令列表合并成一个字符串，每条指令占一行
+        term_instructions_str = "\n".join(instructions)
+        if not term_instructions_str: # 如果没有找到术语
+            term_instructions_str = "未识别到特定的术语翻译规则。"
+
+        # --- 准备输出 ---
+        original_text_passthrough = original_text # 将原文传递下去
+        term_instructions = term_instructions_str # 输出生成的指令字符串
+
+        print(f"生成的术语指令:\n{term_instructions}") # 调试日志
+
+
+  - id: code-kg # 代码节点 2：KG 检索
+    data:
+      type: code
+      title: 2. KG 上下文检索 # 节点标题
+      desc: 识别实体，查询 Neo4j 知识图谱，格式化上下文信息。 # 节点描述
+      variables:
+        inputs: # 定义输入变量
+          - variable: original_text_passthrough # 来自上一个代码节点
+            label: 原始文本
+            type: string
+            required: true
+          - variable: term_instructions # 透传术语指令
+            label: 术语指令 (透传)
+            type: string
+            required: true
+        outputs: # 定义输出变量
+          - variable: original_text_final # 再次透传原文
+            label: 原始文本 (最终)
+            type: string
+          - variable: kg_context # 生成的 KG 上下文
+            label: 知识图谱上下文
+            type: string
+          - variable: term_instructions_passthrough # 再次透传术语指令
+            label: 术语指令 (最终透传)
+            type: string
+      code_language: python3 # 指定代码语言
+      code: | # Python 代码块
+        import os
+        from neo4j import GraphDatabase
+        import neo4j.exceptions
+        import re
+
+        # --- Neo4j 配置 (从 Dify 环境变量获取) ---
+        # 从环境变量读取，如果未设置则使用默认值（或考虑报错）
+        NEO4J_URI = os.getenv("NEO4J_URI", "neo4j://localhost:7687") # 默认本地连接
+        NEO4J_USER = os.getenv("NEO4J_USER", "neo4j") # 默认用户名
+        NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD") # 密码不设默认值，应强制配置
+
+        # --- 实体识别 (简单关键词匹配) ---
+        # 对于原型，我们将尝试查找原文中可能存在于 KG 中的实体
+        # 更健壮的方法涉及 NER 或使用上一步识别出的术语。
+        # 这里我们尝试提取潜在实体（大写字母开头的词或已知缩写）
+        # 这是一个基础启发式方法，可能需要优化。
+        # 查找连续大写字母开头的词组 或 2个以上大写字母组成的缩写
+        potential_entities = set(re.findall(r'\b([A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*)*|[A-Z]{2,})\b', original_text_passthrough))
+        # 也可以考虑将上一步识别出的术语（term_instructions）解析出来加入查询列表，但为简化，暂时只用正则匹配
+        print(f"识别出的潜在待查KG实体: {potential_entities}")
+
+        # --- 查询 Neo4j ---
+        kg_context_statements = [] # 存储从 KG 检索到的信息片段
+        driver = None # 初始化驱动
+        
+        # 检查密码是否已配置
+        if not NEO4J_PASSWORD:
+             print("错误：环境变量 NEO4J_PASSWORD 未设置。")
+             kg_context_str = "知识图谱上下文无法检索（配置错误）。"
+        else:
+            try:
+                # 建立连接
+                driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+                driver.verify_connectivity() # 验证连接性
+                print("成功连接到 Neo4j 数据库。")
+
+                with driver.session() as session: # 使用会话执行查询
+                    # 查询原文中潜在实体的一跳关系
+                    # 限制每个实体返回的关系数和总关系数
+                    max_relations_per_entity = 3 # 每个实体最多查3条关系
+                    max_total_relations = 10    # 总共最多查10条关系
+                    relations_found = 0        # 已找到的关系计数
+
+                    for entity_name in potential_entities: # 遍历识别出的潜在实体
+                        if relations_found >= max_total_relations: # 如果已达到总数限制，则跳出
+                            break
+                        if not entity_name or len(entity_name) < 3: # 跳过太短的潜在实体（可能是噪声）
+                            continue
+
+                        try:
+                            # Cypher 查询：假设节点标签为 'MaritimeEntity'，属性为 'name'
+                            # 查找实体及其一跳邻居和关系
+                            query = """
+                            MATCH (e:MaritimeEntity {name: $entity_name}) // 匹配名为 entity_name 的实体 e
+                            OPTIONAL MATCH (e)-[r]-(related:MaritimeEntity) // 可选地匹配 e 通过关系 r 连接的其他 MaritimeEntity 实体 related
+                            RETURN e.name AS entity, type(r) AS relation, related.name AS related_entity // 返回实体名、关系类型、关联实体名
+                            LIMIT $limit // 限制返回结果数量
+                            """
+                            result = session.run(query, entity_name=entity_name, limit=max_relations_per_entity)
+
+                            entity_described = False # 标记当前实体是否已被描述过
+                            for record in result: # 遍历查询结果
+                                if relations_found >= max_total_relations: # 检查总数限制
+                                     break
+                                rel_type = record["relation"] # 获取关系类型
+                                related_name = record["related_entity"] # 获取关联实体名称
+
+                                if rel_type and related_name: # 确保有关系存在（不是孤立节点）
+                                     # 基础的格式化，将图关系转换为自然语言句子
+                                     statement = f"'{entity_name}' 与 '{related_name}' 之间存在 '{rel_type}' 的关系。"
+                                     # 可以根据关系类型进行更复杂的格式化，例如：
+                                     # if rel_type == 'IS_A': statement = f"'{entity_name}' 是 '{related_name}' 的一种。"
+                                     kg_context_statements.append(statement)
+                                     relations_found += 1
+                                     entity_described = True # 标记已描述
+                                else:
+                                      # 如果实体存在但没有找到关系，可以考虑提及它的存在（可选）
+                                      if not entity_described:
+                                          # 为了简洁，如果没找到关系就不提实体的存在
+                                          # kg_context_statements.append(f"'{entity_name}' 是知识图谱中的一个已知实体。")
+                                          entity_described = True # 即使没关系也标记为已描述过，避免重复提及
+
+                        except neo4j.exceptions.ClientError as ce:
+                             print(f"查询实体 '{entity_name}' 时发生 Cypher 错误: {ce}")
+                        except Exception as e_query:
+                             print(f"查询 Neo4j 实体 '{entity_name}' 时出错: {e_query}")
+
+                if not kg_context_statements: # 如果没有找到任何上下文
+                    kg_context_str = "在知识图谱中未找到与输入文本相关的上下文信息。"
+                else: # 如果找到了，格式化输出
+                    kg_context_str = "从知识图谱获取的背景知识:\n- " + "\n- ".join(kg_context_statements)
+
+            except neo4j.exceptions.AuthError: # 捕获认证错误
+                print("Neo4j 认证失败。请检查 Dify 环境变量中的凭证 (NEO4J_USER, NEO4J_PASSWORD)。")
+                kg_context_str = "知识图谱上下文无法检索（认证错误）。"
+            except neo4j.exceptions.ServiceUnavailable: # 捕获连接错误
+                print(f"无法连接到 Neo4j 数据库 {NEO4J_URI}。请确保数据库正在运行且可访问。")
+                kg_context_str = "知识图谱上下文无法检索（连接错误）。"
+            except Exception as e: # 捕获其他意外错误
+                print(f"在 KG 检索过程中发生意外错误: {e}")
+                kg_context_str = "知识图谱上下文无法检索（意外错误）。"
+            finally: # 确保关闭连接
+                if driver:
+                    driver.close()
+                    print("Neo4j 连接已关闭。")
+
+        # --- 准备输出 ---
+        original_text_final = original_text_passthrough # 透传原文
+        kg_context = kg_context_str # 输出生成的上下文
+        term_instructions_passthrough = term_instructions # 透传术语指令
+
+        print(f"生成的 KG 上下文:\n{kg_context}") # 调试日志
+
+  - id: llm-translate # LLM 节点：执行翻译
+    data:
+      type: llm
+      title: 3. DeepSeek 翻译 # 节点标题
+      desc: 使用 DeepSeek API 将英文翻译成中文，并结合术语指令和 KG 上下文。 # 节点描述
+      variables:
+        inputs: # 定义输入变量
+          - variable: original_text_final # 来自上一个节点
+            label: 原始文本
+            type: string
+            required: true
+          - variable: term_instructions_passthrough # 来自上一个节点
+            label: 术语指令
+            type: string
+            required: true
+          - variable: kg_context # 来自上一个节点
+            label: 知识图谱上下文
+            type: string
+            required: true
+        outputs: # 定义输出变量
+          - variable: translated_text # LLM 生成的译文
+            label: 译文 (中文)
+            type: string
+      model: deepseek-chat # 选择你的 DeepSeek 模型，例如 'deepseek-chat' 或 'deepseek-coder'
+      provider: deepseek # 指定模型提供商
+      completion_params: # 配置 LLM 参数
+        temperature: 0.2 # 较低的温度使翻译更稳定，更倾向于遵循指令
+        max_tokens: 2000 # 最大生成 token 数，根据需要调整
+        # top_p: ... # 其他可选参数
+      prompt_template: # Prompt 模板
+        mode: completion # 使用 'completion' 模式以更好地遵循直接指令
+        prompt: | # Prompt 内容
+          **任务：** 将以下英文航海领域文本翻译成精准、流畅的中文。
+
+          **翻译要求：**
+          1.  准确翻译文本的核心含义。
+          2.  **必须严格遵守** 以下术语翻译规则：
+          {{term_instructions_passthrough}}
+          3.  **请参考以下** 从知识图谱中获取的背景知识，以提升对上下文的理解和翻译的准确性。不要直接复制上下文内容，而是在相关时利用它来辅助翻译：
+          {{kg_context}}
+
+          **英文原文：**
+          {{original_text_final}}
+
+          **中文译文：**
+
+  - id: end-1 # 结束节点
+    data:
+      type: end
+      title: 输出译文 # 节点标题
+      desc: 输出最终的中文翻译结果。 # 节点描述
+      variables:
+        inputs: # 定义输入变量
+          - variable: translated_text # 接收来自 LLM 节点的译文
+            label: 最终中文译文
+            type: string
+            required: true
